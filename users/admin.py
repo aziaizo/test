@@ -1,3 +1,10 @@
 from django.contrib import admin
+from users.models import UserModel, Image
 
-# Register your models here.
+class ImageAdmin(admin.ModelAdmin):
+    list_display = ["image"]
+
+
+admin.site.register(UserModel)
+
+admin.site.register(Image)

@@ -1,28 +1,39 @@
+import random
 from django.contrib.auth import authenticate
-from django.middleware.csrf import logger
-from django.shortcuts import render
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.generics import get_object_or_404, ListAPIView
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
+from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
-from django.contrib.auth.models import User
-from users.serializers import RegisterSerializer, LoginSerializer,VerificationSerializer
+from users.serializers import RegisterSerializer, LoginSerializer, ImageSerializer
 from django.core.mail import send_mail
 from django.conf import settings
+from .models import UserModel, Image, Confirm
+from django.shortcuts import render
+
 
 class RegisterViewSet(GenericViewSet):
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
+    host_user = 'settings.EMAIL_HOST_USER'
 
-    def post(self, request) :
+    def post(self, request):
         data = request.data
         serializer = self.serializer_class(data=data)
         serializer.is_valid(raise_exception=True)
-        user = User.objects.create_user(**serializer.validated_data)
+        user = UserModel.objects.create_user(**serializer.validated_data)
+        user.is_active = False
+        code = Confirm.objects.create(user=user, code=random.randint(1000000, 10000000))
+        email = request.data.get('email')
+        send_mail('Account Details',
+                  str(code.code),
+                  self.host_user,
+                  [email],
+                  fail_silently=False)
         user.save()
-        return Response(data=serializer.data, status=status.HTTP_400_BAD_REQUEST)
+        return Response(data={"status":"the code was sent to the mail!"})
 
     def list(self, request):
         return Response(status=status.HTTP_200_OK)
@@ -33,10 +44,10 @@ class LoginViewSet(GenericViewSet):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        username = request.data.get('username')
-        password = request.data.get('password')
-        user = authenticate(username=username, password=password)
-        if user is not None:
+        serializer = self.serializer_class(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = authenticate(**serializer.validated_data)
+        if user:
             refresh = RefreshToken.for_user(user)
             access = AccessToken.for_user(user)
             return Response(
@@ -53,18 +64,21 @@ class LoginViewSet(GenericViewSet):
         return Response(status=status.HTTP_200_OK)
 
 
+class ConfirmationAPIView(ListAPIView):
+    @staticmethod
+    def post(request):
+        code = request.data.get('code')
+        confirm = get_object_or_404(Confirm, code=code)
+        user = confirm.user
+        user.is_active = True
+        user.save()
+        confirm.delete()
+        return Response(data={'status':'User confirmed!'})
 
-@api_view(['POST'])
-def send_email(request):
-    if request.method == 'POST':
-        serializer = VerificationSerializer(data=request.data)
-        title = request.data.get('title')
-        email = request.data.get('email')
-        message = request.data.get('message')
-        send_mail(
-            'Account Details',
-            message,
-            'settings.EMAIL_HOST_USER',
-            [email],
-            fail_silently=False)
-    return Response(data={'message':'send'})
+class ImageAPIView(APIView):
+    queryset = Image.objects.all()
+    serializer_class = ImageSerializer
+
+    def post(self,request):
+        image = Image.objects.create(image=request.data)
+        return Response(data={'image':'uploaded'})
